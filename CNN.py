@@ -2,13 +2,16 @@ import os
 
 import tensorflow as tf
 from tensorflow.keras import Model, callbacks
-from tensorflow.keras.applications.densenet import DenseNet201
-from tensorflow.keras.applications.mobilenet_v2 import (MobileNetV2,
-                                                        preprocess_input)
+from tensorflow.keras.applications.vgg16 import VGG16
 from tensorflow.keras.layers import (Dense, Dropout, GlobalAveragePooling2D,
                                      Input)
 from tensorflow.keras.metrics import TopKCategoricalAccuracy
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.optimizers import Adam
+import matplotlib.pyplot as plt
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D,MaxPooling2D,Convolution2D,Activation,Flatten,Dense,Dropout,MaxPool2D,BatchNormalization
+
 
 try: # detect TPUs
     tpu = tf.distribute.cluster_resolver.TPUClusterResolver.connect() # TPU detection
@@ -25,8 +28,6 @@ train_dir = data_dir + "/train"
 test_dir = data_dir + "/valid"
 diseases = os.listdir(train_dir)
 print("Total disease classes are: {}".format(len(diseases)))
-
-#---
 
 train_datagen_aug = ImageDataGenerator(rescale = 1./255,
                                    shear_range = 0.2,
@@ -48,14 +49,14 @@ test_datagen_aug = ImageDataGenerator( rescale = 1./255,
 
 training_set_aug = train_datagen_aug.flow_from_directory(directory= train_dir,
                                                target_size=(224, 224), # As we choose 64*64 for our convolution model
-                                               batch_size=32,
+                                               batch_size=64,
                                                class_mode='categorical',
                                                subset='training')
 
 
 validation_set_aug = train_datagen_aug.flow_from_directory(directory= train_dir,
                                                target_size=(224, 224), # As we choose 64*64 for our convolution model
-                                               batch_size=32,
+                                               batch_size=64,
                                                class_mode='categorical',
                                                subset='validation',
                                                shuffle=False)
@@ -70,41 +71,43 @@ print(label_map)
 
 test_set_aug = test_datagen_aug.flow_from_directory(directory= test_dir,
                                                target_size=(224, 224), # As we choose 64*64 for our convolution model
-                                               batch_size=32,
+                                               batch_size=64,
                                                class_mode='categorical') # for 2 class binary
 label_map = (test_set_aug.class_indices)
 print("Target Classes Mapping Dict:\n")
 print(label_map)
-#---
-
 
 with strategy.scope():
-    image_input = Input(shape=(224,224,3))
-    # base_model = tf.keras.applications.EfficientNetB0(include_top=False, input_shape=(224,224,3))
-    base_model = MobileNetV2(weights='imagenet', include_top=False, input_shape=(224,224,3))
-    num_classes = 38
+    # Convolution Neural Networks (CNN)
+    model = Sequential()
 
-    x = base_model(image_input, training = False)
-    base_model.trainable = True
+    model.add(Conv2D(8, kernel_size=(3,3), padding='same', input_shape = (224,224,3)))
+    model.add(Activation('relu'))
+    model.add(MaxPool2D(pool_size=(3, 3)))
 
-    for layer in base_model.layers[:-10]:
-        layer.trainable = False
-#     x = Dense(256,activation = "relu")(x)
-#     x = Dropout(0.2)(x)
+    model.add(Conv2D(16, kernel_size=(3,3), padding='same'))
+    model.add(BatchNormalization())
+    model.add(Activation('relu'))
+    model.add(MaxPool2D(pool_size=(2, 2)))
 
-#     x = Dense(128,activation = "relu")(x)
-    x = GlobalAveragePooling2D()(x)
-    x = Dropout(0.2)(x)
-    output = Dense(num_classes, activation='softmax')(x)
+    model.add(Conv2D(32, kernel_size=(3,3), padding='same'))
+    model.add(BatchNormalization())
+    model.add(Activation('relu'))
+    model.add(MaxPool2D(pool_size=(2, 2)))
 
+    model.add(Conv2D(32, kernel_size=(3,3), padding='same'))
+    model.add(BatchNormalization())
+    model.add(Activation('relu'))
+    model.add(MaxPool2D(pool_size=(2, 2)))
 
-    # 
-    model = Model(inputs=image_input, outputs=output)
-
+    model.add(Flatten())
+    model.add(Dense(38, activation='softmax'))
+       
     print(model.summary())
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy', 'top_k_categorical_accuracy',TopKCategoricalAccuracy(k=1, name="top1")])
+    
+    optimizer = Adam(learning_rate=0.01)
 
-
+    model.compile(optimizer=optimizer, loss='categorical_crossentropy', metrics=['accuracy', 'top_k_categorical_accuracy',TopKCategoricalAccuracy(k=1, name="top1")])
 
 early_stopping_cb = callbacks.EarlyStopping(monitor="val_loss", patience=3)
 reduce_lr = callbacks.ReduceLROnPlateau(monitor="val_loss",  
@@ -113,35 +116,35 @@ reduce_lr = callbacks.ReduceLROnPlateau(monitor="val_loss",
                                               verbose=1, 
                                               min_lr=1e-7)
 history = model.fit(training_set_aug,
-                    epochs=30,
+                    epochs=10,
                     verbose=1,
                     callbacks=[early_stopping_cb, reduce_lr],
                     validation_data = validation_set_aug, 
+                    # steps_per_epoch = 20,
+                    # validation_steps = 20
                     )
 
 model.evaluate(test_set_aug)
 
-import matplotlib.pyplot as plt
+
 
 # Plotting
 hist = history.history
-
-# Plot accuracy and loss
-plt.plot(hist["top1"], label="top1")
-plt.plot(hist["top_k_categorical_accuracy"], label="top5")
-plt.plot(hist["accuracy"], label="accuracy")
-plt.plot(hist["loss"], label="loss")
-
-if "val_accuracy" in hist and "val_loss" in hist:
-    plt.plot(hist["top1"], label="val_top1")
-    plt.plot(hist["val_top_k_categorical_accuracy"], label="val_top5")
-    plt.plot(hist["val_accuracy"], label="val_accuracy")
-    plt.plot(hist["val_loss"], label="val_loss")
-
-# Add the labels and legend
-plt.ylabel("Accuracy / Loss")
-plt.xlabel("Epochs #")
-plt.legend()
-
-# Finally show the plot
-plt.show()
+def show_plt(type):
+    if type == 1:
+        plt.plot(hist["accuracy"], label="accuracy")
+        plt.plot(hist["val_accuracy"], label="val_accuracy")
+        plt.ylabel("Aaccuracy")
+        plt.xlabel("Epochs #")
+        plt.legend()
+        plt.show()
+    else:
+        plt.plot(hist["loss"], label="loss")
+        plt.plot(hist["val_loss"], label="val_loss")
+        plt.ylabel("Losss")
+        plt.xlabel("Epochs #")
+        plt.legend()
+        plt.show()
+        
+show_plt(1)
+show_plt(0)
